@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from bedrock_handler.summary_bedrock_handler import SummaryBedrockHandler
 from bedrock_handler.audit_bedrock_handler import AuditBedrockHandler
+from whisper_sqs_message_processor import WhisperSQSMessageProcessor
 load_dotenv()
 
 
@@ -11,151 +12,98 @@ import os
 import re
 import whisperx_transcribe
 import tempfile
+import boto3
+from urllib import parse
 
-def extract_video_id(url):
-    regex = r"(?<=v=)[^&#]+|(?<=be/)[^&#]+"
-    match = re.search(regex, url)
-    return match.group(0) if match else None
+s3 = boto3.client('s3')
+bucket_name = 'whisper-bucket-091063646508'
 
-def extract_audio(video_path, audio_path):
-    command = ['ffmpeg', '-i', video_path, '-vn', '-y', audio_path]
-    subprocess.run(command, check=True)
-
-def download(video_id: str) -> str:
-    video_id = video_id.strip()
-    video_url = f'https://www.youtube.com/watch?v={video_id}'
-    ydl_opts = {
-        'format': 'm4a/bestaudio/best',
-        'paths': {'home': 'audio/'},
-        'outtmpl': {'default': '%(id)s.%(ext)s'},
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'm4a',
-        }]
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        error_code = ydl.download([video_url])
-        if error_code != 0:
-            raise Exception('Failed to download video')
-
-    return f'audio/{video_id}.m4a'
-
-def process(youtube_url, language):
-    video_id = extract_video_id(youtube_url)
-    if not video_id:
-        st.error("Invalid YouTube URL")
-        return
-
-    try:
-        progress_text = "Downloading video..."
-        progress_value = 0
-        progress_bar = st.progress(progress_value, text=progress_text)
-        audio_file = download(video_id)
-        progress_value = 33
-        progress_bar.progress(progress_value, text=progress_text)
-    except Exception as e:
-        st.error(f"Failed to download video: {e}")
-        return
-
-    audio_file_mp3 = 'audio/audio.mp3'
-    progress_text = "Converting audio format..."
-    progress_value = 66
-    progress_bar.progress(progress_value, text=progress_text)
-    subprocess.run(['ffmpeg', '-i', audio_file, '-y', audio_file_mp3], check=True)
-
-    progress_text = "Transcribing audio..."
-    progress_value = 70
-    progress_bar.progress(progress_value, text=progress_text)
-    transcription = whisperx_transcribe.transcribe(audio_file_mp3, "large-v3", language=language)
-    progress_text = "Transcribing completed..."
-    progress_value = 100
-    progress_bar.progress(progress_value, text=progress_text)
-    st.write(transcription)
-    # Remove temporary files
-    os.remove(audio_file)
-    os.remove(audio_file_mp3)
-    return transcription
+def list_files(prefix):
+    # Initialize S3 client
+    response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    files = [obj['Key'] for obj in response.get('Contents', [])]
+    return files
 
 def main():
-    st.title("Audio Transcription")
+    st.title("Videos Management")
     if 'transcription' not in st.session_state:
         st.session_state.transcription=""
     if 'btn_disabled' not in st.session_state:
         st.session_state.btn_disabled = True
-    tabs = st.tabs(["YouTube Video", "MP3 File"])
+    tabs = st.tabs(["Video List","Video File Upload"])
     with tabs[0]:
-        youtube_url = st.text_input("Enter YouTube URL")
-        language = None
-        button_container = st.container()
-        with button_container:
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                transcribe_button = st.button("Transcribe", key="url")
-            with col2:
-                summary_button = st.button("Summary", key="summary",disabled=st.session_state.btn_disabled)
-            with col3:
-                audit_button = st.button("Audit", key="audit",disabled=st.session_state.btn_disabled)
-        st.write(st.session_state.transcription)
-        if transcribe_button:
-            st.session_state.transcription = process(youtube_url, language)
-            st.session_state.btn_disabled = False
-            st.experimental_rerun()
-        if summary_button:
-            print(st.session_state.transcription)
-            llm = SummaryBedrockHandler(region="us-west-2",content=st.session_state.transcription)
-            response_body = llm.invoke()
-            #st.json(st.session_state.transcription)
-            st.write(response_body)
-        if audit_button:
-            print(st.session_state.transcription)
-            llm = AuditBedrockHandler(region="us-west-2",content=st.session_state.transcription)
-            response_body = llm.invoke()
-            #st.json(st.session_state.transcription)
-            st.write(response_body)
-    with tabs[1]:
-        mp3_file = st.file_uploader("Upload MP3 File", type=["mp3","m4a"])
-        language = None
-        button_container = st.container()
-        with button_container:
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                transcribe_mp3_button = st.button("Transcribe", key="mp3")
-            with col2:
-                summary_mp3_button = st.button("Summary", key="summary_mp3")
-            with col3:
-                audit_mp3_button = st.button("Audit", key="audit_mp3")
+        # List video files
+        video_files = list_files('video/')
 
-        if transcribe_mp3_button:
-            progress_text = "Processing MP3 file..."
+        # Streamlit UI
+        # st.title('Video List')
+
+        # Display video list
+        for idx, video_file in enumerate(video_files):
+            video_name = video_file.split('/')[-1].split('.')[0]
+            video_url = f'https://d28uasq88yts27.cloudfront.net/{video_file}'
+            st.subheader(f'{video_name}')
+            st.video(video_url)
+            st.write(f'**Link:** {video_url}')
+            # Fetch corresponding files from other directories
+            asr_file = f'asr/{video_name}.txt'
+            summary_file = f'summary/{video_name}.txt'
+            tag_file = f'tag/{video_name}.txt'
+
+            if summary_file in list_files('summary/'):
+                obj = s3.get_object(Bucket=bucket_name, Key=summary_file)
+                summary_content = obj['Body'].read().decode('utf-8')
+                summary_content.replace('摘要', ' ')
+                summary_content.replace('合规风险', '\n**合规风险**')
+                st.write(f'**Summary** {summary_content}')
+
+            if tag_file in list_files('tag/'):
+                obj = s3.get_object(Bucket=bucket_name, Key=tag_file)
+                tag_content = obj['Body'].read().decode('utf-8')
+                st.write(f'**Tags:** {tag_content}')
+
+            if idx != len(video_files) - 1:
+                st.write('<hr>', unsafe_allow_html=True)
+    with tabs[1]:
+        video_file = st.file_uploader("Upload Video File", type=["mp3","mp4"])
+        language = None
+        button_container = st.container()
+        btn_video_upload = st.button("Upload", key="btn_video_upload")
+
+        if btn_video_upload:
+            progress_text = "Uploading Video file..."
             progress_value = 10
             progress_bar = st.progress(progress_value, text=progress_text)
             # Save the uploaded file to a temporary file
-            file_extension = mp3_file.name.split('.')[-1]
+            file_extension = video_file.name.split('.')[-1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as tmp_file:
-                tmp_file.write(mp3_file.getvalue())
+                tmp_file.write(video_file.getvalue())
                 tmp_file_path = tmp_file.name
+            tags = {
+                'model_size': 'large',
+                'llm_handle': 'asr/tag/summary'
+            }
 
-            transcription = whisperx_transcribe.transcribe(tmp_file_path, "large", language=language)
-            st.session_state.transcription=transcription
-            st.write(transcription)
+            # Upload the file to S3 and add tags in a single call
+            try:
+                s3.upload_file(
+                    tmp_file_path,
+                    bucket_name,
+                    video_file.name,
+                    ExtraArgs={
+                        'Tagging': parse.urlencode(tags)
+                    }
+                )
+            except Exception as e:
+                print(f"Error uploading file and adding tags: {e}")
+                exit(1)
             progress_value = 100
             progress_text = "Processing completed..."
             progress_bar.progress(progress_value, text=progress_text)
 
-            # Remove the temporary file
+            # # Remove the temporary file
             os.unlink(tmp_file_path)
-            st.experimental_rerun()
-        if summary_mp3_button:
-            llm = SummaryBedrockHandler(region="us-west-2",content=st.session_state.transcription)
-            response_body = llm.invoke()
-            #st.json(st.session_state.transcription)
-            st.write(response_body)
-        if audit_mp3_button:
-            print(st.session_state.transcription)
-            llm = AuditBedrockHandler(region="us-west-2",content=st.session_state.transcription)
-            response_body = llm.invoke()
-            #st.json(st.session_state.transcription)
-            st.write(response_body)
+            # st.experimental_rerun()
 
 if __name__ == "__main__":
     main()

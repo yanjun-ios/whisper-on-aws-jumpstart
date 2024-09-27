@@ -19,4 +19,5 @@ class SummaryBedrockHandler(BedrockHandler):
 </transcription_text>
 """
         system_prompt = system_prompt.replace("speak_context",json.dumps(self.content))
+        self.prompt = system_prompt
         return system_prompt

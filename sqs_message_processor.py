@@ -3,6 +3,7 @@ import boto3
 import time
 import json
 import logging
+import traceback
 from urllib.parse import urlparse
 
 class SQSMessageProcessor(abc.ABC):
@@ -48,7 +49,9 @@ class SQSMessageProcessor(abc.ABC):
                     self.process_message(message)
                     self.delete_message(message)
                 except Exception as e:
+                    self.delete_message(message)
                     self.logger.error("An error occurred when process : %s",e)
+                    self.logger.error(traceback.format_exc())
                     self.logger.info("The message will be added to dead letter exchange...")
 
     def receive_messages(self):

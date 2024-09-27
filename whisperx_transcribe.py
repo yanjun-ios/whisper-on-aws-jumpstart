@@ -2,6 +2,7 @@ import whisperx
 import gc
 import os
 import time
+import json
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -22,9 +23,16 @@ def convert_format(data):
         new_item = {
             "start": item["start"],
             "end": item["end"],
-            "text": item["text"],
-            "speaker": item["words"][0]["speaker"]
+            "text": item["text"]
+            # "speaker": item["words"][0]["speaker"]
         }
+        # 检查 "words" 键是否存在,且列表不为空
+        if "words" in item and item["words"]:
+            speaker = item["words"][0].get("speaker", "")
+            new_item["speaker"] = speaker
+        else:
+            new_item["speaker"] = ""
+        
         result.append(new_item)
     return result
 
@@ -55,7 +63,8 @@ def transcribe(audio_file, model_needed, language=None):
     if language != None:
         transcribe_args["language"] = language
     start_time = time.time()
-    result = model.transcribe(audio, batch_size=batch_size)
+    result = model.transcribe(audio, batch_size=batch_size,chunk_size=10)
+    # print(json.dumps(result))
     transcribe_time = time.time()
     execution_time = transcribe_time - start_time
     print(f"transcribe_time: {execution_time} seconds")
